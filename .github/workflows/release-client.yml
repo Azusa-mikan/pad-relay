@@ -12,14 +12,10 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: Install SDL2
         run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
       - name: Test Go client
-        run: go test -race ./...
+        run: go version && go test -race ./...
       - name: Test browser shim
         run: node --test tests/ws-shim.test.js
 
@@ -29,10 +25,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: Install linker dependencies
         run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
       - name: Build
@@ -44,8 +36,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          tar -C build -czf dist/pad-relay-client_linux_amd64.tar.gz pad-relay-client
-      - uses: actions/upload-artifact@v4
+          cp LICENSE build/LICENSE
+          tar -C build -czf dist/pad-relay-client_linux_amd64.tar.gz pad-relay-client LICENSE
+      - uses: actions/upload-artifact@v7
         with:
           name: pad-relay-client_linux_amd64
           path: dist/pad-relay-client_linux_amd64.tar.gz
@@ -62,10 +55,6 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: Build Intel
         env:
           GOARCH: amd64
@@ -84,8 +73,9 @@ jobs:
             build/arm64/pad-relay-client \
             -output build/universal/pad-relay-client
           lipo build/universal/pad-relay-client -verify_arch x86_64 arm64
-          tar -C build/universal -czf dist/pad-relay-client_macos_universal.tar.gz pad-relay-client
-      - uses: actions/upload-artifact@v4
+          cp LICENSE build/universal/LICENSE
+          tar -C build/universal -czf dist/pad-relay-client_macos_universal.tar.gz pad-relay-client LICENSE
+      - uses: actions/upload-artifact@v7
         with:
           name: pad-relay-client_macos_universal
           path: dist/pad-relay-client_macos_universal.tar.gz
@@ -98,16 +88,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
       - uses: msys2/setup-msys2@v2
         id: msys2
         with:
           msystem: MINGW64
           update: true
-          install: mingw-w64-x86_64-gcc
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-SDL2
       - name: Add MinGW to PATH
         shell: pwsh
         run: |
@@ -125,13 +113,63 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CC: gcc
-        run: go build -trimpath -tags static -ldflags "-s -w" -o build/pad-relay-client.exe ./cmd/gamepad-client
+        run: go build -trimpath -ldflags "-s -w" -o build/pad-relay-client.exe ./cmd/gamepad-client
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
+          $queue = [System.Collections.Generic.Queue[string]]::new()
+          $seen = @{}
+          $queue.Enqueue((Resolve-Path "build/pad-relay-client.exe").Path)
+
+          while ($queue.Count -gt 0) {
+              $binary = $queue.Dequeue()
+              foreach ($line in (& objdump -p $binary)) {
+                  if ($line -notmatch "DLL Name:\s+(\S+)$") {
+                      continue
+                  }
+                  $dll = $Matches[1]
+                  $key = $dll.ToLowerInvariant()
+                  if ($seen.ContainsKey($key)) {
+                      continue
+                  }
+                  $seen[$key] = $true
+                  if ($key -eq "msys-2.0.dll") {
+                      throw "The executable unexpectedly depends on the MSYS2 runtime"
+                  }
+
+                  $source = Join-Path $mingwBin $dll
+                  if (Test-Path $source) {
+                      $destination = Join-Path "build" $dll
+                      Copy-Item $source $destination
+                      $queue.Enqueue((Resolve-Path $destination).Path)
+                  }
+              }
+          }
+
+          if (-not (Test-Path "build/SDL2.dll")) {
+              throw "SDL2.dll was not discovered in the executable dependencies"
+          }
+          Copy-Item "${{ steps.msys2.outputs.msys2-location }}\mingw64\share\licenses\SDL2\LICENSE.txt" build/SDL2-LICENSE.txt
+
+          Get-ChildItem build/*.dll | ForEach-Object { Write-Host "Bundled $($_.Name)" }
+          $originalPath = $env:PATH
+          try {
+              $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+              .\build\pad-relay-client.exe -h
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Windows executable smoke test failed with exit code $LASTEXITCODE"
+              }
+          } finally {
+              $env:PATH = $originalPath
+          }
       - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path build/pad-relay-client.exe -DestinationPath dist/pad-relay-client_windows_amd64.zip
-      - uses: actions/upload-artifact@v4
+          Copy-Item LICENSE build/LICENSE
+          Compress-Archive -Path build/pad-relay-client.exe,build/*.dll,build/LICENSE,build/SDL2-LICENSE.txt -DestinationPath dist/pad-relay-client_windows_amd64.zip
+      - uses: actions/upload-artifact@v7
         with:
           name: pad-relay-client_windows_amd64
           path: dist/pad-relay-client_windows_amd64.zip
@@ -147,7 +185,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: release
           merge-multiple: true
