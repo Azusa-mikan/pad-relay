@@ -1,0 +1,160 @@
+name: Build and release client
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Test Go client
+        run: go test -race ./...
+      - name: Test browser shim
+        run: node --test tests/ws-shim.test.js
+
+  linux:
+    name: Linux amd64
+    needs: check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install linker dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -trimpath -tags static -ldflags "-s -w" -o build/pad-relay-client ./cmd/gamepad-client
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -C build -czf dist/pad-relay-client_linux_amd64.tar.gz pad-relay-client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pad-relay-client_linux_amd64
+          path: dist/pad-relay-client_linux_amd64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  macos:
+    name: macOS universal
+    needs: check
+    runs-on: macos-latest
+    env:
+      CGO_ENABLED: "1"
+      GOOS: darwin
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build Intel
+        env:
+          GOARCH: amd64
+          CC: clang -arch x86_64
+        run: go build -trimpath -tags static -ldflags "-s -w" -o build/amd64/pad-relay-client ./cmd/gamepad-client
+      - name: Build Apple Silicon
+        env:
+          GOARCH: arm64
+          CC: clang -arch arm64
+        run: go build -trimpath -tags static -ldflags "-s -w" -o build/arm64/pad-relay-client ./cmd/gamepad-client
+      - name: Package universal binary
+        run: |
+          mkdir -p build/universal dist
+          lipo -create \
+            build/amd64/pad-relay-client \
+            build/arm64/pad-relay-client \
+            -output build/universal/pad-relay-client
+          lipo -verify_arch x86_64 arm64 build/universal/pad-relay-client
+          tar -C build/universal -czf dist/pad-relay-client_macos_universal.tar.gz pad-relay-client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pad-relay-client_macos_universal
+          path: dist/pad-relay-client_macos_universal.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    name: Windows amd64
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+      - name: Build
+        shell: msys2 {0}
+        env:
+          CGO_ENABLED: "1"
+          GOOS: windows
+          GOARCH: amd64
+          CC: gcc
+        run: go build -trimpath -tags static -ldflags "-s -w" -o build/pad-relay-client.exe ./cmd/gamepad-client
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path build/pad-relay-client.exe -DestinationPath dist/pad-relay-client_windows_amd64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pad-relay-client_windows_amd64
+          path: dist/pad-relay-client_windows_amd64.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - linux
+      - macos
+      - windows
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum pad-relay-client_*.tar.gz pad-relay-client_*.zip > SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="build-$(date -u +'%Y%m%d-%H%M%S')"
+          gh release create "$tag" \
+            release/pad-relay-client_linux_amd64.tar.gz \
+            release/pad-relay-client_macos_universal.tar.gz \
+            release/pad-relay-client_windows_amd64.zip \
+            release/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --title "PadRelay client $tag" \
+            --generate-notes \
+            --latest
