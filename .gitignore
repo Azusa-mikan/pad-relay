@@ -10,4 +10,4 @@ wheels/
 .venv
 
 # Go-generated files
-gamepad-client
+/gamepad-client
