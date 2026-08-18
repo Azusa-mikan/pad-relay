@@ -1,12 +1,4 @@
-//go:build windows
-
 package main
-
-import (
-	"sync"
-	"syscall"
-	"unsafe"
-)
 
 const (
 	xinputDPadUp        = 0x0001
@@ -40,41 +32,6 @@ type xinputState struct {
 	Gamepad      xinputGamepad
 }
 
-var (
-	xinputOnce     sync.Once
-	xinputGetState *syscall.LazyProc
-)
-
-func loadXInput() {
-	for _, name := range [...]string{"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"} {
-		dll := syscall.NewLazyDLL(name)
-		if err := dll.Load(); err != nil {
-			continue
-		}
-		proc := dll.NewProc("XInputGetState")
-		if err := proc.Find(); err == nil {
-			xinputGetState = proc
-			return
-		}
-	}
-}
-
-func readXInputSnapshot(id string) (snapshot, bool) {
-	xinputOnce.Do(loadXInput)
-	if xinputGetState == nil {
-		return snapshot{}, false
-	}
-
-	for index := uintptr(0); index < 4; index++ {
-		var raw xinputState
-		result, _, _ := xinputGetState.Call(index, uintptr(unsafe.Pointer(&raw)))
-		if result == 0 {
-			return snapshotFromXInput(id, raw.Gamepad), true
-		}
-	}
-	return snapshot{}, false
-}
-
 func snapshotFromXInput(id string, gamepad xinputGamepad) snapshot {
 	state := snapshot{ID: id}
 	setXInputButton(&state, 0, gamepad.Buttons, xinputA)
@@ -91,7 +48,6 @@ func snapshotFromXInput(id string, gamepad xinputGamepad) snapshot {
 	setXInputButton(&state, 13, gamepad.Buttons, xinputDPadDown)
 	setXInputButton(&state, 14, gamepad.Buttons, xinputDPadLeft)
 	setXInputButton(&state, 15, gamepad.Buttons, xinputDPadRight)
-
 	state.Axes[0] = normalizeAxis(gamepad.ThumbLX)
 	state.Axes[1] = round4(-normalizeAxis(gamepad.ThumbLY))
 	state.Axes[2] = normalizeAxis(gamepad.ThumbRX)
@@ -102,12 +58,7 @@ func snapshotFromXInput(id string, gamepad xinputGamepad) snapshot {
 }
 
 func setXInputButton(state *snapshot, index int, buttons, mask uint16) {
-	pressed := buttons&mask != 0
-	value := 0.0
-	if pressed {
-		value = 1
-	}
-	state.Buttons[index] = buttonState{Pressed: pressed, Value: value}
+	setDigitalButton(state, index, buttons&mask != 0)
 }
 
 func setXInputTrigger(state *snapshot, index int, raw uint8) {

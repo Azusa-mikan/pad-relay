@@ -90,87 +90,30 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - uses: msys2/setup-msys2@v2
-        id: msys2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-SDL2
-      - name: Add MinGW to PATH
-        shell: pwsh
-        run: |
-          "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Verify toolchain
-        shell: pwsh
-        run: |
-          go version
-          gcc --version
-          ld --version
+      - name: Test
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./...
       - name: Build
         shell: pwsh
         env:
-          CGO_ENABLED: "1"
+          CGO_ENABLED: "0"
           GOOS: windows
           GOARCH: amd64
-          CC: gcc
         run: go build -trimpath -ldflags "-s -w" -o build/pad-relay-client.exe ./cmd/gamepad-client
       - name: Verify executable
         shell: pwsh
         run: |
-          $mingwBin = "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin"
-          $queue = [System.Collections.Generic.Queue[string]]::new()
-          $seen = @{}
-          $queue.Enqueue((Resolve-Path "build/pad-relay-client.exe").Path)
-
-          while ($queue.Count -gt 0) {
-              $binary = $queue.Dequeue()
-              foreach ($line in (& objdump -p $binary)) {
-                  if ($line -notmatch "DLL Name:\s+(\S+)$") {
-                      continue
-                  }
-                  $dll = $Matches[1]
-                  $key = $dll.ToLowerInvariant()
-                  if ($seen.ContainsKey($key)) {
-                      continue
-                  }
-                  $seen[$key] = $true
-                  if ($key -eq "msys-2.0.dll") {
-                      throw "The executable unexpectedly depends on the MSYS2 runtime"
-                  }
-
-                  $source = Join-Path $mingwBin $dll
-                  if (Test-Path $source) {
-                      $destination = Join-Path "build" $dll
-                      Copy-Item $source $destination
-                      $queue.Enqueue((Resolve-Path $destination).Path)
-                  }
-              }
-          }
-
-          if (-not (Test-Path "build/SDL2.dll")) {
-              throw "SDL2.dll was not discovered in the executable dependencies"
-          }
-          Copy-Item "${{ steps.msys2.outputs.msys2-location }}\mingw64\share\licenses\SDL2\LICENSE.txt" build/SDL2-LICENSE.txt
-
-          Get-ChildItem build/*.dll | ForEach-Object { Write-Host "Bundled $($_.Name)" }
-          $originalPath = $env:PATH
-          try {
-              $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
-              .\build\pad-relay-client.exe -h
-              if ($LASTEXITCODE -ne 0) {
-                  throw "Windows executable smoke test failed with exit code $LASTEXITCODE"
-              }
-          } finally {
-              $env:PATH = $originalPath
+          .\build\pad-relay-client.exe -version
+          if ($LASTEXITCODE -ne 0) {
+              throw "Windows executable smoke test failed with exit code $LASTEXITCODE"
           }
       - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item LICENSE build/LICENSE
-          Compress-Archive -Path build/pad-relay-client.exe,build/*.dll,build/LICENSE,build/SDL2-LICENSE.txt -DestinationPath dist/pad-relay-client_windows_amd64.zip
+          Compress-Archive -Path build/pad-relay-client.exe,build/LICENSE -DestinationPath dist/pad-relay-client_windows_amd64.zip
       - uses: actions/upload-artifact@v7
         with:
           name: pad-relay-client_windows_amd64
