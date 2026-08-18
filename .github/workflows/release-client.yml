@@ -9,75 +9,50 @@ permissions:
 jobs:
   linux:
     name: Linux amd64
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Install linker dependencies
-        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Install dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y golang-go gcc pkg-config libsdl2-dev nodejs
       - name: Test
         run: |
           go version
           go test -race ./...
           node --test tests/ws-shim.test.js
       - name: Build
-        env:
-          CGO_ENABLED: "1"
-          GOOS: linux
-          GOARCH: amd64
-        run: go build -trimpath -tags static -ldflags "-s -w" -o build/pad-relay-client ./cmd/gamepad-client
+        run: |
+          cat > /tmp/pkg-config-static-sdl <<"EOF"
+          #!/bin/sh
+          if [ "$1" = "--libs" ]; then
+            shift
+            flags=$(/usr/bin/pkg-config --static --libs "$@") || exit $?
+            printf "%s\n" "$flags" | sed "s/-lSDL2/-Wl,-Bstatic -lSDL2 -Wl,-Bdynamic/"
+            exit 0
+          fi
+          exec /usr/bin/pkg-config "$@"
+          EOF
+          chmod +x /tmp/pkg-config-static-sdl
+          mkdir -p build
+          PKG_CONFIG=/tmp/pkg-config-static-sdl CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags "-s -w" -o build/pad-relay-client ./cmd/gamepad-client
+          if ldd build/pad-relay-client | grep -q "libSDL2"; then
+            echo "SDL2 was dynamically linked"
+            exit 1
+          fi
       - name: Package
         run: |
           mkdir -p dist
           cp LICENSE build/LICENSE
-          tar -C build -czf dist/pad-relay-client_linux_amd64.tar.gz pad-relay-client LICENSE
+          cp /usr/share/doc/libsdl2-dev/copyright build/SDL2-LICENSE.txt
+          tar -C build -czf dist/pad-relay-client_linux_amd64.tar.gz pad-relay-client LICENSE SDL2-LICENSE.txt
       - uses: actions/upload-artifact@v7
         with:
           name: pad-relay-client_linux_amd64
           path: dist/pad-relay-client_linux_amd64.tar.gz
-          if-no-files-found: error
-          compression-level: 0
-
-  macos:
-    name: macOS universal
-    runs-on: macos-latest
-    env:
-      CGO_ENABLED: "1"
-      GOOS: darwin
-      MACOSX_DEPLOYMENT_TARGET: "11.0"
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Build Intel
-        env:
-          GOARCH: amd64
-          CC: clang -arch x86_64
-        run: go build -trimpath -tags static -ldflags "-s -w" -o build/amd64/pad-relay-client ./cmd/gamepad-client
-      - name: Build Apple Silicon
-        env:
-          GOARCH: arm64
-          CC: clang -arch arm64
-        run: go build -trimpath -tags static -ldflags "-s -w" -o build/arm64/pad-relay-client ./cmd/gamepad-client
-      - name: Package universal binary
-        run: |
-          mkdir -p build/universal dist
-          lipo -create \
-            build/amd64/pad-relay-client \
-            build/arm64/pad-relay-client \
-            -output build/universal/pad-relay-client
-          lipo build/universal/pad-relay-client -verify_arch x86_64 arm64
-          cp LICENSE build/universal/LICENSE
-          tar -C build/universal -czf dist/pad-relay-client_macos_universal.tar.gz pad-relay-client LICENSE
-      - uses: actions/upload-artifact@v7
-        with:
-          name: pad-relay-client_macos_universal
-          path: dist/pad-relay-client_macos_universal.tar.gz
           if-no-files-found: error
           compression-level: 0
 
@@ -125,9 +100,8 @@ jobs:
     name: Publish GitHub Release
     needs:
       - linux
-      - macos
       - windows
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v8
@@ -145,7 +119,6 @@ jobs:
           tag="build-$(date -u +'%Y%m%d-%H%M%S')"
           gh release create "$tag" \
             release/pad-relay-client_linux_amd64.tar.gz \
-            release/pad-relay-client_macos_universal.tar.gz \
             release/pad-relay-client_windows_amd64.zip \
             release/SHA256SUMS \
             --target "$GITHUB_SHA" \
