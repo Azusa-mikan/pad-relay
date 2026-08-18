@@ -7,16 +7,23 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-const defaultURL = "ws://localhost:8000/ws/controller"
+const (
+	defaultURL         = "ws://localhost:8000/ws/controller"
+	clientFeatureLevel = "windows-xinput-v3"
+)
+
+var clientVersion = "dev"
 
 type activeController struct {
 	controller *sdl.GameController
+	useXInput  bool
 	instanceID sdl.JoystickID
 	name       string
 	id         string
@@ -30,8 +37,13 @@ func main() {
 
 func realMain() int {
 	url := flag.String("url", defaultURL, "WebSocket 服务端地址")
-	diagnose := flag.Bool("diagnose", false, "输出原始 SDL 手柄事件")
+	diagnose := flag.Bool("diagnose", false, "输出手柄诊断信息")
+	showVersion := flag.Bool("version", false, "输出客户端版本")
 	flag.Parse()
+	if *showVersion {
+		printVersion()
+		return 0
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -41,6 +53,23 @@ func realMain() int {
 		return 1
 	}
 	return 0
+}
+
+func printVersion() {
+	revision := "unknown"
+	modified := "unknown"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				revision = setting.Value
+			case "vcs.modified":
+				modified = setting.Value
+			}
+		}
+	}
+	fmt.Printf("PadRelay client %s (feature=%s, revision=%s, modified=%s)\n",
+		clientVersion, clientFeatureLevel, revision, modified)
 }
 
 func run(ctx context.Context, url string, diagnose bool) error {
@@ -61,7 +90,7 @@ func run(ctx context.Context, url string, diagnose bool) error {
 	if active == nil {
 		log.Print("未找到受支持的手柄，等待插入")
 	} else {
-		publishSnapshot(updates, readSnapshot(active.controller, active.id))
+		publishSnapshot(updates, readSnapshot(active.controller, active.id, active.useXInput))
 	}
 
 	for ctx.Err() == nil {
@@ -84,7 +113,7 @@ func run(ctx context.Context, url string, diagnose bool) error {
 			continue
 		}
 
-		state := readSnapshot(active.controller, active.id)
+		state := readSnapshot(active.controller, active.id, active.useXInput)
 		if !active.hasState || state != active.state {
 			active.state = state
 			active.hasState = true
@@ -166,6 +195,14 @@ func openController(index int) *activeController {
 		name:       controller.Name(),
 		id:         gamepadID(controller.Name(), controller.Vendor(), controller.Product()),
 	}
+	if isZikwayXboxDevice(controller.Vendor(), controller.Product()) {
+		if _, ok := readXInputSnapshot(active.id); ok {
+			active.useXInput = true
+			log.Print("输入后端: Windows XInput")
+		} else {
+			log.Print("Windows XInput 未检测到手柄，回退到 SDL")
+		}
+	}
 	log.Printf("已连接手柄: %s (%04x:%04x, instance=%d)", active.name, controller.Vendor(), controller.Product(), active.instanceID)
 	return active
 }
@@ -181,12 +218,20 @@ func gamepadID(name string, vendor, product int) string {
 		if !strings.Contains(lowerName, "dualshock") {
 			name = "DualShock 4 " + name
 		}
-	case vendor == 0x045e || strings.Contains(lowerName, "xbox") || strings.Contains(lowerName, "xinput"):
+	case isXboxController(vendor, product) || strings.Contains(lowerName, "xbox") || strings.Contains(lowerName, "xinput"):
 		if !strings.Contains(lowerName, "xinput") {
 			name = "XInput " + name
 		}
 	}
 	return fmt.Sprintf("%s (Vendor: %04x Product: %04x)", name, vendor, product)
+}
+
+func isXboxController(vendor, product int) bool {
+	return vendor == 0x045e || isZikwayXboxDevice(vendor, product)
+}
+
+func isZikwayXboxDevice(vendor, product int) bool {
+	return vendor == 0x413d && product == 0x2104
 }
 
 func addCustomMapping(index int) {
@@ -221,6 +266,8 @@ func publishSnapshot(updates chan snapshot, state snapshot) {
 
 func runDiagnostics(ctx context.Context) error {
 	joysticks := make(map[sdl.JoystickID]*sdl.Joystick)
+	xinputInstances := make(map[sdl.JoystickID]bool)
+	lastXInput := make(map[sdl.JoystickID]snapshot)
 	open := func(index int) {
 		instanceID := sdl.JoystickGetDeviceInstanceID(index)
 		if _, exists := joysticks[instanceID]; exists {
@@ -234,6 +281,36 @@ func runDiagnostics(ctx context.Context) error {
 		joysticks[instanceID] = joystick
 		log.Printf("诊断设备: %s (%04x:%04x, instance=%d, axes=%d, buttons=%d, hats=%d)",
 			joystick.Name(), joystick.Vendor(), joystick.Product(), joystick.InstanceID(), joystick.NumAxes(), joystick.NumButtons(), joystick.NumHats())
+		if isZikwayXboxDevice(joystick.Vendor(), joystick.Product()) {
+			if _, ok := readXInputSnapshot("diagnose"); ok {
+				xinputInstances[instanceID] = true
+				log.Printf("instance=%d XInput 诊断已启用", instanceID)
+			} else {
+				log.Printf("instance=%d XInput 不可用，使用 SDL 诊断", instanceID)
+			}
+		}
+	}
+	poll := func() {
+		for instanceID := range xinputInstances {
+			state, ok := readXInputSnapshot("diagnose")
+			if !ok {
+				continue
+			}
+			if previous, exists := lastXInput[instanceID]; exists {
+				for index, button := range state.Buttons {
+					if button != previous.Buttons[index] {
+						log.Printf("instance=%d xinput-button=%d pressed=%t value=%.4f",
+							instanceID, index, button.Pressed, button.Value)
+					}
+				}
+				for index, value := range state.Axes {
+					if value != previous.Axes[index] {
+						log.Printf("instance=%d xinput-axis=%d value=%.4f", instanceID, index, value)
+					}
+				}
+			}
+			lastXInput[instanceID] = state
+		}
 	}
 
 	for index := 0; index < sdl.NumJoysticks(); index++ {
@@ -242,14 +319,21 @@ func runDiagnostics(ctx context.Context) error {
 	log.Print("按动手柄控件，按 Ctrl+C 退出")
 
 	for ctx.Err() == nil {
+		poll()
 		event := sdl.WaitEventTimeout(100)
 		switch event := event.(type) {
 		case *sdl.JoyAxisEvent:
-			log.Printf("instance=%d axis=%d value=%d", event.Which, event.Axis, event.Value)
+			if !xinputInstances[event.Which] {
+				log.Printf("instance=%d axis=%d value=%d", event.Which, event.Axis, event.Value)
+			}
 		case *sdl.JoyButtonEvent:
-			log.Printf("instance=%d button=%d state=%d", event.Which, event.Button, event.State)
+			if !xinputInstances[event.Which] {
+				log.Printf("instance=%d button=%d state=%d", event.Which, event.Button, event.State)
+			}
 		case *sdl.JoyHatEvent:
-			log.Printf("instance=%d hat=%d value=%d", event.Which, event.Hat, event.Value)
+			if !xinputInstances[event.Which] {
+				log.Printf("instance=%d hat=%d value=%d", event.Which, event.Hat, event.Value)
+			}
 		case *sdl.JoyDeviceAddedEvent:
 			open(int(event.Which))
 		case *sdl.JoyDeviceRemovedEvent:
@@ -257,6 +341,8 @@ func runDiagnostics(ctx context.Context) error {
 				log.Printf("诊断设备已断开: %s (instance=%d)", joystick.Name(), event.Which)
 				joystick.Close()
 				delete(joysticks, event.Which)
+				delete(xinputInstances, event.Which)
+				delete(lastXInput, event.Which)
 			}
 		}
 	}

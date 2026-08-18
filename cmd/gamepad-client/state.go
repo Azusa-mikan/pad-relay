@@ -43,7 +43,13 @@ var buttonMappings = [...]struct {
 	{sdl.CONTROLLER_BUTTON_GUIDE, 16},
 }
 
-func readSnapshot(controller *sdl.GameController, id string) snapshot {
+func readSnapshot(controller *sdl.GameController, id string, useXInput bool) snapshot {
+	if useXInput {
+		if state, ok := readXInputSnapshot(id); ok {
+			return state
+		}
+	}
+
 	state := snapshot{ID: id}
 
 	for _, mapping := range buttonMappings {
