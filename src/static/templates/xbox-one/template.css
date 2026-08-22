@@ -2,8 +2,6 @@
 
 #gamepad[data-color="black"] { background-image: url(base-black.svg); }
 #gamepad[data-color="white"] { background-image: url(base-white.svg); }
-#gamepad.disconnected        { background-image: url(disconnected.svg); }
-#gamepad.disconnected div    { display: none; }
 
 #gamepad .triggers { width: 448px; height: 122px; position: absolute; left: 151px; }
 #gamepad .trigger  { width: 89px; height: 122px; background: url(trigger.svg); clip-path: inset(100% 0px 0px 0pc); }

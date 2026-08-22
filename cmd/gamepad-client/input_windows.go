@@ -80,7 +80,7 @@ func (backend *xinputBackend) run(ctx context.Context, updates chan snapshot) er
 		state, ok := backend.snapshot(active)
 		if !ok {
 			log.Printf("手柄已断开: XInput Controller %d", active+1)
-			publishSnapshot(updates, snapshot{})
+			publishSnapshot(updates, disconnectedSnapshot(previous.ID))
 			active = -1
 			hasPrevious = false
 			continue

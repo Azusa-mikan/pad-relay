@@ -30,10 +30,24 @@
     }
 
     function disconnectGamepad() {
-        if (!wsConnected) return;
+        const wasConnected = wsConnected;
         wsConnected = false;
         fakeGamepad.connected = false;
-        window.dispatchEvent(new GamepadEvent("gamepaddisconnected", { gamepad: fakeGamepad }));
+
+        if (
+            window.gamepad &&
+            typeof window.gamepad.onRelayDisconnect === "function"
+        ) {
+            window.gamepad.onRelayDisconnect();
+        }
+
+        if (wasConnected) {
+            window.dispatchEvent(
+                new GamepadEvent("gamepaddisconnected", {
+                    gamepad: fakeGamepad,
+                }),
+            );
+        }
     }
 
     function connectGamepad(data) {
@@ -71,7 +85,11 @@
                 return;
             }
 
-            if (typeof data.id !== "string" || data.id === "") {
+            if (
+                data.connected === false ||
+                typeof data.id !== "string" ||
+                data.id === ""
+            ) {
                 disconnectGamepad();
                 return;
             }

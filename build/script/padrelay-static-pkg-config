@@ -1,0 +1,8 @@
+#!/bin/sh
+if [ "$1" = "--libs" ]; then
+    shift
+    flags=$(/usr/bin/pkg-config --static --libs "$@") || exit $?
+    printf "%s\n" "$flags" | sed "s/-lSDL2/-Wl,-Bstatic -lSDL2 -Wl,-Bdynamic/"
+    exit 0
+fi
+exec /usr/bin/pkg-config "$@"

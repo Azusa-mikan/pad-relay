@@ -106,7 +106,6 @@ class Gamepad {
         this.activity = {};
         this.debug = false;
         this.index = null;
-        this.disconnectedIndex = null;
         this.type = null;
         this.identifier = null;
         this.lastTimestamp = null;
@@ -136,7 +135,6 @@ class Gamepad {
                 this.onGamepadDisconnect.bind(this),
             );
         }
-
         // listen for mouse move events
         window.addEventListener("mousemove", this.onMouseMove.bind(this));
         // listen for keyboard events
@@ -469,13 +467,23 @@ class Gamepad {
         this.updateGamepadList();
 
         if (e.gamepad.index === this.index) {
-            // display a disconnection indicator
-            this.$gamepad.classList.add("disconnected");
-            this.disconnectedIndex = e.gamepad.index;
+            this.clear(true);
+            this.displayPlaceholder(true);
         }
 
         // refresh gamepad list on help, if displayed
         if (this.helpVisible) this.buildHelpGamepadList();
+    }
+
+    /**
+     * Handles a relay controller WebSocket shutdown independently of the
+     * browser Gamepad API connection state.
+     */
+    onRelayDisconnect() {
+        this.clear(true);
+        this.displayPlaceholder(true);
+        this.pollGamepads();
+        this.updateGamepadList();
     }
 
     /**
@@ -704,7 +712,7 @@ class Gamepad {
      */
     scan() {
         // don't scan if we have an active gamepad
-        if (null !== this.index && null === this.disconnectedIndex) return;
+        if (null !== this.index) return;
 
         // refresh gamepad information
         this.pollGamepads();
@@ -716,12 +724,6 @@ class Gamepad {
         }
 
         for (let index = 0; index < this.gamepads.length; index++) {
-            if (
-                null !== this.disconnectedIndex &&
-                index !== this.disconnectedIndex
-            )
-                continue;
-
             const gamepad = this.gamepads[index];
             if (!gamepad) continue;
 
@@ -798,8 +800,6 @@ class Gamepad {
 
         // update local references
         this.index = index;
-        this.disconnectedIndex = null;
-        this.$gamepad.classList.remove("disconnected");
         const gamepad = this.getActive();
 
         // ensure that a gamepad was actually found for this index
@@ -841,16 +841,14 @@ class Gamepad {
     /**
      * Disconnect the active gamepad
      *
-     * @param {int} index
-     * @param {object} options
+     * @param {boolean} [preserveSettings=false] Keep skin/color/trigger URL settings
      */
-    clear() {
+    clear(preserveSettings = false) {
         // ensure we have something to disconnect
         if (this.index === null) return;
 
         // clear associated data
         this.index = null;
-        this.disconnectedIndex = null;
         this.debug = false;
         this.lastTimestamp = null;
         this.type = null;
@@ -861,11 +859,14 @@ class Gamepad {
         this.updateButton = null;
         this.updateAxis = null;
         this.updateFrame = null;
+        this.hide(this.$gamepad);
         this.$gamepad.replaceChildren();
         this.$gamepadSelect.value = "auto";
         this.updateColors();
         this.updateTriggers();
-        this.clearUrlParams();
+        if (!preserveSettings) {
+            this.clearUrlParams();
+        }
     }
 
     /**
@@ -885,6 +886,9 @@ class Gamepad {
         fetch(`templates/${this.type}/template.html`)
             .then((response) => response.text())
             .then(async (template) => {
+                // The gamepad may have disconnected while the template loaded.
+                if (this.getActive() !== gamepad) return;
+
                 // inject the template HTML, then run its scripts in order
                 this.$gamepad.innerHTML = template;
                 await this.runTemplateScripts(this.$gamepad);
@@ -970,9 +974,6 @@ class Gamepad {
     pollStatus(force = false) {
         // ensure that a gamepad is currently active
         if (this.index === null) return;
-
-        // suspend the render loop while disconnected; it resumes on reconnect
-        if (this.disconnectedIndex !== null) return;
 
         // enqueue the next refresh
         window.requestAnimationFrame(() => this.pollStatus());

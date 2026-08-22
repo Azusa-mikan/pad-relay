@@ -33,7 +33,7 @@ type xinputState struct {
 }
 
 func snapshotFromXInput(id string, gamepad xinputGamepad) snapshot {
-	state := snapshot{ID: id}
+	state := connectedSnapshot(id)
 	setXInputButton(&state, 0, gamepad.Buttons, xinputA)
 	setXInputButton(&state, 1, gamepad.Buttons, xinputB)
 	setXInputButton(&state, 2, gamepad.Buttons, xinputX)

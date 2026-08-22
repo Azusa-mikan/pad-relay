@@ -7,8 +7,6 @@
 #gamepad[data-color="white"] { background-image: url(base-white.svg); }
 #gamepad[data-color="red"]   { background-image: url(base-red.svg); }
 #gamepad[data-color="blue"]  { background-image: url(base-blue.svg); }
-#gamepad.disconnected        { background-image: url(disconnected.svg); }
-#gamepad.disconnected div    { display: none; }
 
 #gamepad .triggers { width: 588px; height: 90px; position: absolute; left: 109px; }
 #gamepad .trigger { width: 99px; height: 100%; background: url(triggers.svg); clip-path: inset(100% 0px 0px 0pc); }

@@ -13,9 +13,18 @@ type buttonState struct {
 }
 
 type snapshot struct {
-	ID      string                  `json:"id"`
-	Buttons [numButtons]buttonState `json:"buttons"`
-	Axes    [numAxes]float64        `json:"axes"`
+	ID        string                  `json:"id"`
+	Connected bool                    `json:"connected"`
+	Buttons   [numButtons]buttonState `json:"buttons"`
+	Axes      [numAxes]float64        `json:"axes"`
+}
+
+func connectedSnapshot(id string) snapshot {
+	return snapshot{ID: id, Connected: true}
+}
+
+func disconnectedSnapshot(id string) snapshot {
+	return snapshot{ID: id, Connected: false}
 }
 
 func setDigitalButton(state *snapshot, index int, pressed bool) {

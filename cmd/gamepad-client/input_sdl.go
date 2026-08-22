@@ -74,7 +74,7 @@ func runInput(ctx context.Context, updates chan snapshot, diagnose bool) error {
 		if !active.controller.Attached() {
 			log.Printf("手柄已断开: %s", active.name)
 			active.controller.Close()
-			publishSnapshot(updates, snapshot{})
+			publishSnapshot(updates, disconnectedSnapshot(active.id))
 			active = openFirstSDLController()
 			continue
 		}
@@ -109,7 +109,7 @@ func handleSDLDeviceEvent(event sdl.Event, active *sdlController, updates chan s
 			if active != nil && event.Which == active.instanceID {
 				log.Printf("手柄已断开: %s", active.name)
 				active.controller.Close()
-				publishSnapshot(updates, snapshot{})
+				publishSnapshot(updates, disconnectedSnapshot(active.id))
 				return openFirstSDLController()
 			}
 		}
@@ -117,7 +117,7 @@ func handleSDLDeviceEvent(event sdl.Event, active *sdlController, updates chan s
 		if active != nil && event.Which == active.instanceID {
 			log.Printf("手柄已断开: %s", active.name)
 			active.controller.Close()
-			publishSnapshot(updates, snapshot{})
+			publishSnapshot(updates, disconnectedSnapshot(active.id))
 			return openFirstSDLController()
 		}
 	}
@@ -182,7 +182,7 @@ func addZikwaySDLMapping(index int) {
 }
 
 func readSDLSnapshot(controller *sdl.GameController, id string) snapshot {
-	state := snapshot{ID: id}
+	state := connectedSnapshot(id)
 	for _, mapping := range sdlButtonMappings {
 		setDigitalButton(&state, mapping.index, controller.Button(mapping.button) != 0)
 	}
